@@ -94,6 +94,10 @@ def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     # Create a SummaryWriter for use in TensorBoard
     writer = SummaryWriter()
 
+    # Log the arguments used for this run
+    for arg, value in vars(args).items():
+        writer.add_text(f'Arguments/{arg}', str(value), 0)
+
     train(net, criterion, optimizer, trainloader, device, num_epochs, writer)
 
     # Close the SummaryWriter
