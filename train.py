@@ -34,7 +34,7 @@ def initialize_model(learning_rate, momentum, device):
     net = BranchyResNet18().to(device)
 
     # Define a Loss function and optimizer
-    criterion = nn.CrossEntropyLoss()
+    criterion = CustomCriterion()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
 
     return net, criterion, optimizer
