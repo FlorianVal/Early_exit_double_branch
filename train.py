@@ -52,8 +52,9 @@ def train(net, criterion, optimizer, dataloader, device, num_epochs, writer, eva
             if not eval:
                 optimizer.zero_grad()
 
-            net.train(not eval)
-            outputs = net(inputs)
+            with torch.autograd.profiler.profile(use_cuda=inputs.is_cuda) as prof:
+                net.train(not eval)
+                outputs = net(inputs)
 
             for head, output in enumerate(outputs):
                 metric["loss_head_" + str(head)] = criterion(output, labels)
@@ -62,6 +63,7 @@ def train(net, criterion, optimizer, dataloader, device, num_epochs, writer, eva
             if not eval:
                 metric["total_loss"].backward()
                 optimizer.step()
+                print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
 
             # Calculate accuracy
             _, predicted = torch.max(outputs, -1)
