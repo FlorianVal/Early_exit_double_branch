@@ -34,7 +34,13 @@ def initialize_model(learning_rate, momentum, device):
     net = BranchyResNet18().to(device)
 
     # Define a Loss function and optimizer
-    from src.CustomCriterion import CustomCriterion
+    class CustomCriterion(nn.Module):
+        def __init__(self):
+            super(CustomCriterion, self).__init__()
+
+        def forward(self, outputs, labels):
+            loss = torch.mean((outputs - labels) ** 2)
+            return loss
     criterion = CustomCriterion()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
 
