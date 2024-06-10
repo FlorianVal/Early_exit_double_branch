@@ -63,9 +63,18 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
             loss["total_loss"].backward()
             optimizer.step()
 
+            # Calculate accuracy
+            _, predicted = torch.max(outputs.data, 1)
+            total = labels.size(0)
+            correct = (predicted == labels).sum().item()
+            accuracy = correct / total
+
+            # Log accuracy
+            writer.add_scalar('Accuracy/total_accuracy', accuracy, epoch * len(trainloader) + i)
+
             # print statistics
             loss["running_loss"] += loss["total_loss"].item()
-            batch_tqdm.set_postfix(loss="{:.4f}".format(loss["running_loss"] / (i + 1)))
+            batch_tqdm.set_postfix(loss="{:.4f}".format(loss["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
         
             # Log the losses to TensorBoard
             writer.add_scalar('Loss/total_loss', loss["total_loss"], epoch * len(trainloader) + i)
