@@ -76,10 +76,11 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
             metric["running_loss"] += metric["total_loss"].item()
             batch_tqdm.set_postfix(loss="{:.4f}".format(metric["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
         
-            # Log the losses to TensorBoard
+            # Log the losses and accuracy to TensorBoard
             writer.add_scalar('Loss/total_loss', metric["total_loss"], epoch * len(trainloader) + i)
             for head in range(len(outputs)):
                 writer.add_scalar(f'Loss/head_{head}', metric[f"loss_head_{head}"], epoch * len(trainloader) + i)
+                writer.add_scalar(f'Accuracy/head_{head}', metric[f"accuracy_head_{head}"], epoch * len(trainloader) + i)
 
 def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     
