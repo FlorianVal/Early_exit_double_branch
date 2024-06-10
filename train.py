@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+import torch.profiler
 from torchvision import datasets, transforms
 from torch.utils.tensorboard import SummaryWriter
 
@@ -18,13 +19,13 @@ def load_data(batch_size, num_workers):
     trainset = datasets.CIFAR100(root='./data', train=True,
                                             download=True, transform=transform)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size,
-                                              shuffle=True, num_workers=num_workers, pin_memory=True)
+                                              shuffle=True, num_workers=num_workers, pin_memory=False)
 
     # Load test data
     testset = datasets.CIFAR100(root='./data', train=False,
                                            download=True, transform=transform)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size,
-                                             shuffle=False, num_workers=num_workers, pin_memory=True)
+                                             shuffle=False, num_workers=num_workers, pin_memory=False)
 
     return trainloader, testloader
 
@@ -38,34 +39,28 @@ def initialize_model(learning_rate, momentum, device):
 
     return net, criterion, optimizer
 
-def train(net, criterion, optimizer, dataloader, device, num_epochs, writer, eval=False):
+def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
     metric = {}
-    mode = "Training" if not eval else "Evaluation"
-    epoch_tqdm = tqdm(range(num_epochs), desc=f"{mode} Epochs")
 
+    epoch_tqdm = tqdm(range(num_epochs))
     for epoch in epoch_tqdm:
         metric["running_loss"] = 0.0
-        batch_tqdm = tqdm(enumerate(dataloader, 0), total=len(dataloader), desc=f"{mode} Batches")
+        batch_tqdm = tqdm(enumerate(trainloader, 0), total=len(trainloader))
         for i, data in batch_tqdm:
+            # Start the profiler
             inputs, labels = data[0].to(device), data[1].to(device)
 
-            if not eval:
-                optimizer.zero_grad()
+            optimizer.zero_grad()
 
-            with torch.autograd.profiler.profile(use_cuda=inputs.is_cuda) as prof:
-                net.train(not eval)
-                outputs = net(inputs)
+            outputs, outputs_reg = net(inputs)
 
             for head, output in enumerate(outputs):
                 metric["loss_head_" + str(head)] = criterion(output, labels)
             metric["total_loss"] = sum(metric["loss_head_" + str(head)] for head in range(len(outputs)))
 
-            if not eval:
-                metric["total_loss"].backward()
-                optimizer.step()
-                print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10))
+            metric["total_loss"].backward()
+            optimizer.step()
 
-            # Calculate accuracy
             _, predicted = torch.max(outputs, -1)
             predicted = predicted.squeeze()
             total = labels.size(0)
@@ -74,12 +69,16 @@ def train(net, criterion, optimizer, dataloader, device, num_epochs, writer, eva
                 accuracy = correct / total
                 metric["accuracy_head_" + str(head)] = accuracy
 
-            # Log metrics
-            batch_tqdm.set_postfix(loss="{:.4f}".format(metric["total_loss"].item()), accuracy="{:.4f}".format(accuracy))
-            writer.add_scalar(f'Loss/total_loss_{mode.lower()}', metric["total_loss"].item(), epoch * len(dataloader) + i)
-            for head in range(len(outputs)):
-                writer.add_scalar(f'Loss/head_{head}_{mode.lower()}', metric[f"loss_head_{head}"], epoch * len(dataloader) + i)
-                writer.add_scalar(f'Accuracy/head_{head}_{mode.lower()}', metric[f"accuracy_head_{head}"], epoch * len(dataloader) + i)
+            metric["running_loss"] += metric["total_loss"].item()
+            batch_tqdm.set_postfix(loss="{:.4f}".format(metric["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
+
+
+
+        # Log the losses and accuracy to TensorBoard
+        writer.add_scalar('Loss/total_loss', metric["total_loss"], epoch * len(trainloader) + i)
+        for head in range(len(outputs)):
+            writer.add_scalar(f'Loss/head_{head}', metric[f"loss_head_{head}"], epoch * len(trainloader) + i)
+            writer.add_scalar(f'Accuracy/head_{head}', metric[f"accuracy_head_{head}"], epoch * len(trainloader) + i)
 
 def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     
@@ -97,9 +96,7 @@ def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     for arg, value in vars(args).items():
         writer.add_text(f'Arguments/{arg}', str(value), 0)
 
-    for epoch in range(num_epochs):
-        train(net, criterion, optimizer, trainloader, device, num_epochs, writer)
-        train(net, criterion, optimizer, testloader, device, num_epochs, writer, eval=True)
+    train(net, criterion, optimizer, trainloader, device, num_epochs, writer)
 
     # Close the SummaryWriter
     writer.close()
