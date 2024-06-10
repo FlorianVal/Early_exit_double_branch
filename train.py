@@ -39,12 +39,12 @@ def initialize_model(learning_rate, momentum, device):
     return net, criterion, optimizer
 
 def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
-    loss = {}
+    metric = {}
 
     epoch_tqdm = tqdm(range(num_epochs))  # loop over the dataset multiple times
     # Training loop
     for epoch in epoch_tqdm:
-        loss["running_loss"] = 0.0
+        metric["running_loss"] = 0.0
         batch_tqdm = tqdm(enumerate(trainloader, 0), total=len(trainloader))
         for i, data in batch_tqdm:
             # get the inputs; data is a list of [inputs, labels]
@@ -57,30 +57,29 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
             outputs = net(inputs)
 
             for head, output in enumerate(outputs):
-                loss["head_" + str(head)] = criterion(output, labels)
-            loss["total_loss"] = sum(loss["head_" + str(head)] for head in range(len(outputs)))
+                metric["loss_head_" + str(head)] = criterion(output, labels)
+            metric["total_loss"] = sum(metric["loss_head_" + str(head)] for head in range(len(outputs)))
 
-            loss["total_loss"].backward()
+            metric["total_loss"].backward()
             optimizer.step()
 
             # Calculate accuracy
-            _, predicted = torch.max(outputs.data, 1)
+            _, predicted = torch.max(outputs, -1)
             predicted = predicted.squeeze()  # Ensure the size of predicted matches the size of labels
             total = labels.size(0)
-            correct = (predicted == labels).sum().item()
-            accuracy = correct / total
-
-            # Log accuracy
-            writer.add_scalar('Accuracy/total_accuracy', accuracy, epoch * len(trainloader) + i)
-
+            for head, prediction in enumerate(predicted):    
+                correct = (prediction == labels).sum().item()
+                accuracy = correct / total
+                metric["accuracy_head_" + str(head)] = accuracy
+                
             # print statistics
-            loss["running_loss"] += loss["total_loss"].item()
-            batch_tqdm.set_postfix(loss="{:.4f}".format(loss["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
+            metric["running_loss"] += metric["total_loss"].item()
+            batch_tqdm.set_postfix(loss="{:.4f}".format(metric["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
         
             # Log the losses to TensorBoard
-            writer.add_scalar('Loss/total_loss', loss["total_loss"], epoch * len(trainloader) + i)
+            writer.add_scalar('Loss/total_loss', metric["total_loss"], epoch * len(trainloader) + i)
             for head in range(len(outputs)):
-                writer.add_scalar(f'Loss/head_{head}', loss[f"head_{head}"], epoch * len(trainloader) + i)
+                writer.add_scalar(f'Loss/head_{head}', metric[f"loss_head_{head}"], epoch * len(trainloader) + i)
 
 def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     
