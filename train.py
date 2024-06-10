@@ -65,6 +65,7 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
 
             # Calculate accuracy
             _, predicted = torch.max(outputs.data, 1)
+            predicted = predicted.squeeze()  # Ensure the size of predicted matches the size of labels
             total = labels.size(0)
             correct = (predicted == labels).sum().item()
             accuracy = correct / total
