@@ -1,0 +1,1 @@
+Latest command used : train.py --num_epochs 25 --batch_size 64 --num_workers 0

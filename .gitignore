@@ -1,0 +1,6 @@
+.aider*
+.vscode
+data
+log
+runs
+__pycache__

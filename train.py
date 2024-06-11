@@ -38,9 +38,13 @@ def initialize_model(learning_rate, momentum, device):
         def __init__(self):
             super(CustomCriterion, self).__init__()
 
-        def forward(self, outputs, labels):
-            loss = torch.mean((outputs - labels) ** 2)
-            return loss
+        def forward(self, outputs, regression, labels):
+            ce = torch.functional.F.cross_entropy(outputs, labels, reduction="none")
+            regularization = torch.sigmoid(regression.squeeze())
+            regul_ce = ce * regularization
+            loss = regul_ce.mean()
+            return ce, regularization, loss
+        
     criterion = CustomCriterion()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
 
@@ -54,17 +58,29 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
         metric["running_loss"] = 0.0
         batch_tqdm = tqdm(enumerate(trainloader, 0), total=len(trainloader))
         for i, data in batch_tqdm:
-            # Start the profiler
             inputs, labels = data[0].to(device), data[1].to(device)
 
             optimizer.zero_grad()
 
             outputs, outputs_reg = net(inputs)
+            final_output = outputs[-1]
+            head_outputs = outputs[:-1]
 
-            for head, output in enumerate(outputs):
-                metric["loss_head_" + str(head)] = criterion(output, labels)
+            for head, (output, reg) in enumerate(zip(head_outputs, outputs_reg)):
+                ce, reg, loss = criterion(output, reg, labels)
+                metric["ce_head_" + str(head)] = ce.mean()
+                metric["reg_mean_head_" + str(head)] = reg.mean()
+                metric["reg_std_head_" + str(head)] = reg.std()
+                metric["reg_var_head_" + str(head)] = reg.var()
+                metric["loss_head_" + str(head)] = loss
+            head += 1
+            ce, reg, loss = criterion(final_output, torch.full_like(final_output[...,0], 1e8), labels)
+            metric["ce_head_" + str(head)] = ce.mean()
+            metric["reg_mean_head_" + str(head)] = reg.mean()
+            metric["reg_std_head_" + str(head)] = reg.std()
+            metric["reg_var_head_" + str(head)] = reg.var()
+            metric["loss_head_" + str(head)] = loss
             metric["total_loss"] = sum(metric["loss_head_" + str(head)] for head in range(len(outputs)))
-
             metric["total_loss"].backward()
             optimizer.step()
 
@@ -79,13 +95,15 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
             metric["running_loss"] += metric["total_loss"].item()
             batch_tqdm.set_postfix(loss="{:.4f}".format(metric["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
 
-
-
-        # Log the losses and accuracy to TensorBoard
-        writer.add_scalar('Loss/total_loss', metric["total_loss"], epoch * len(trainloader) + i)
-        for head in range(len(outputs)):
-            writer.add_scalar(f'Loss/head_{head}', metric[f"loss_head_{head}"], epoch * len(trainloader) + i)
-            writer.add_scalar(f'Accuracy/head_{head}', metric[f"accuracy_head_{head}"], epoch * len(trainloader) + i)
+            log_interval = len(trainloader) // 10
+            if i % log_interval == 0:
+                # Log the losses and accuracy to TensorBoard
+                writer.add_scalar('Loss/total_loss', metric["total_loss"], epoch * len(trainloader) + i)
+                for key, value in metric.items():
+                    if key != "total_loss" and key != "running_loss":
+                        head = key.split("_")[-1]
+                        base_key = "_".join(key.split("_")[:-2])
+                        writer.add_scalar(f'{base_key}/head_{head}', value, epoch * len(trainloader) + i)
 
 def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     
