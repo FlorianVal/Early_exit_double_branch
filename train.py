@@ -42,21 +42,31 @@ def initialize_model(learning_rate, momentum, device):
             ce = torch.functional.F.cross_entropy(outputs, labels, reduction="none")
             regularization = torch.sigmoid(regression.squeeze())
             regul_ce = ce * regularization
-            loss = regul_ce.mean()
+            centered_mean_reg = (0.5 - regularization.mean())**2 # force mean of regularization to be 0.5
+            max_std_reg = 1 / (regularization.std() + 1e-6) # force std of regularization to be high ( reg should be 1 or 0)
+            split_value_reg = torch.exp(-10*(0.5 - regularization)**2).mean() # Value near 0.5 are penalized strongly and are forced to go to 0 or 1
+            avoid_zero_reg = (1/(regularization+1e-2)).mean() # Avoid 0 values in the regularization
+            #loss = regul_ce.mean() * regul_loss * (1 / (regularization.std() + 1e-6))
+            regul_loss = split_value_reg + max_std_reg# * avoid_zero_reg
+            loss = regul_ce.mean() + regul_loss
+            #print(f"Loss elements : regul_ce.mean() = {regul_ce.mean()}, regul_loss = {regul_loss}")
+            #loss = torch.exp(-10*(0.5 - regularization)**2).mean() * (1 / (regularization.std() + 1e-6))
             return ce, regularization, loss
         
     criterion = CustomCriterion()
+    final_head_criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=momentum)
 
-    return net, criterion, optimizer
+    return net, criterion, final_head_criterion, optimizer
 
-def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
+def train(net, criterion, final_head_criterion, optimizer, trainloader, device, num_epochs, writer):
     metric = {}
 
     epoch_tqdm = tqdm(range(num_epochs))
     for epoch in epoch_tqdm:
         metric["running_loss"] = 0.0
         batch_tqdm = tqdm(enumerate(trainloader, 0), total=len(trainloader))
+        log_interval = len(trainloader) // 10
         for i, data in batch_tqdm:
             inputs, labels = data[0].to(device), data[1].to(device)
 
@@ -73,12 +83,12 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
                 metric["reg_std_head_" + str(head)] = reg.std()
                 metric["reg_var_head_" + str(head)] = reg.var()
                 metric["loss_head_" + str(head)] = loss
+                if i % log_interval == 0:
+                    print(reg)
+                    print(reg.std())
+                    print(1/(reg.std() + 1e-6))
             head += 1
-            ce, reg, loss = criterion(final_output, torch.full_like(final_output[...,0], 1e8), labels)
-            metric["ce_head_" + str(head)] = ce.mean()
-            metric["reg_mean_head_" + str(head)] = reg.mean()
-            metric["reg_std_head_" + str(head)] = reg.std()
-            metric["reg_var_head_" + str(head)] = reg.var()
+            loss = final_head_criterion(final_output, labels)
             metric["loss_head_" + str(head)] = loss
             metric["total_loss"] = sum(metric["loss_head_" + str(head)] for head in range(len(outputs)))
             metric["total_loss"].backward()
@@ -86,8 +96,21 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
 
             _, predicted = torch.max(outputs, -1)
             predicted = predicted.squeeze()
+            
+
             total = labels.size(0)
             for head, prediction in enumerate(predicted):
+                # prediction is just [batch_size]
+                if head != len(predicted) - 1:
+                    filtered_prediction = prediction[outputs_reg[head].squeeze() > 0.5]
+                    filtered_labels = labels[outputs_reg[head].squeeze() > 0.5]
+                    num_not_filtered_data = len(filtered_labels)
+                    if num_not_filtered_data != 0:
+                        filtered_correct = (filtered_prediction == filtered_labels).sum().item()
+                        relative_accuracy = filtered_correct / num_not_filtered_data
+                    else:
+                        relative_accuracy = 0
+                    metric["relative_accuracy_head_" + str(head)] = relative_accuracy
                 correct = (prediction == labels).sum().item()
                 accuracy = correct / total
                 metric["accuracy_head_" + str(head)] = accuracy
@@ -95,7 +118,6 @@ def train(net, criterion, optimizer, trainloader, device, num_epochs, writer):
             metric["running_loss"] += metric["total_loss"].item()
             batch_tqdm.set_postfix(loss="{:.4f}".format(metric["running_loss"] / (i + 1)), accuracy="{:.4f}".format(accuracy))
 
-            log_interval = len(trainloader) // 10
             if i % log_interval == 0:
                 # Log the losses and accuracy to TensorBoard
                 writer.add_scalar('Loss/total_loss', metric["total_loss"], epoch * len(trainloader) + i)
@@ -112,7 +134,7 @@ def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    net, criterion, optimizer = initialize_model(learning_rate, momentum, device)
+    net, criterion, final_head_criterion, optimizer = initialize_model(learning_rate, momentum, device)
 
     # Create a SummaryWriter for use in TensorBoard
     writer = SummaryWriter()
@@ -121,7 +143,7 @@ def main(learning_rate, momentum, batch_size, num_workers, num_epochs):
     for arg, value in vars(args).items():
         writer.add_text(f'Arguments/{arg}', str(value), 0)
 
-    train(net, criterion, optimizer, trainloader, device, num_epochs, writer)
+    train(net, criterion, final_head_criterion, optimizer, trainloader, device, num_epochs, writer)
 
     # Close the SummaryWriter
     writer.close()
